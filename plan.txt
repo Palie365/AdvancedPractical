@@ -1,0 +1,27 @@
+Data:
+Divide the data into 3 shifts for each day
+For each of those shifts, calculate the MLE of the Poisson distribution => over long-time it averages out.
+Sunday's last shift goes into Monday => remember to calculate based on this
+
+Service time:
+max: 10 tons 60 mins
+min: 0 tons 5 mins
+mode: 5 tons 32.5 mins
+
+tons are distributed triangularly with mode 5.
+
+
+Costs:
+27*3*8 per shift * dock
+average waiting time per shift * 27 
+
+Total cost:
+s_i_j : 0 if there are no workers needed in shift i at dock j
+	1 if there are workers needed in shift i at dock j
+
+if not all docks are busy:
+s_i_j*27*3*8*docks_busy
+
+if all the docks are busy, then the total cost :
+s_i_j*27*3*8*docks_busy + average waiting time per shift * 27 
+
