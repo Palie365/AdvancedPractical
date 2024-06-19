@@ -1,6 +1,6 @@
 import numpy as np
-import pandas as pd
 import numpy.random as rnd
+from gurobipy import *
 
 class Data(object):
     def __init__(self):
@@ -277,7 +277,7 @@ def HandleDeparture(AWT, te, X, Q, L, obs):
         obs.waitingTime += w
         if w < AWT:
             obs.numOntime += 1
-        else: 
+        else:
             obs.lateWeight += first.getWeight()
         obs.numServed += 1
         i = first.getIdnr()
@@ -290,34 +290,32 @@ def HandleDeparture(AWT, te, X, Q, L, obs):
 # simulation run until end of day T
 # AWT = accepted waiting time
 
-def simrun(lamda, c, T, AWT, shift_length):
-    tc = 1  # current time
+def simrun(lamda, c, tc, T, AWT, shift_length):
     nc = 0  # customer number = number of arrivals
-    #shift = (tc-6)//8 
-    
+    shift = 0
+
     X = State()
     Q = Queue()
     L = Eventlist()
     obs = QPerformanceMeasures()
 
-
-    evt = Event(ranpoisson(lamda[tc-1]), 'arr', 0)  # first arrival
+    evt = Event(ranpoisson(lamda[int((tc-1)//1)]), 'arr', 0)  # first arrival
     L.addEvent(evt)
-    
-    for i in range(len(lamda)):
-        L.addEvent(Event(i , 'hour', 0))
 
     while tc < T:
+        if (tc + 2) // shift_length > T/shift_length - 1:
+            shift = 0
+        else:
+            shift = (tc + 2) // shift_length
+
         evt = L.getFirstEvent()  # next event
         te = evt.getTime()
         tp = evt.getType()
         ti = te - tc
         obs.queueArea += ti * X.queueLength  # all the customers in the queue has to wait t_i
 
-        if tp == 'hour':
-            tc+=1
-        elif tp == 'arr':  # arrival event
-            nc = HandleArrival(lamda[int(tc-1)], c, te, nc, X, Q, L, obs)
+        if tp == 'arr':  # arrival event
+            nc = HandleArrival(lamda[int((tc-1)//1)], c, te, nc, X, Q, L, obs)
         else:  # departure event
             HandleDeparture(AWT, te, X, Q, L, obs)
             tc = te
@@ -332,44 +330,49 @@ def simrun(lamda, c, T, AWT, shift_length):
 
 ###########################################################################
 # do n runs , collect statistics and report output
-def simulations(lamda, N, T, AWT, n, shift_length):
+def simulations(lamda, N, tc, T, AWT, n, shift_length, cost_per_hour):
     cumobs = QPerformanceMeasures()
     for j in range(n):
-        obs = simrun(lamda,  N, T, AWT, shift_length)
+        obs = simrun(lamda,  N, tc, T, AWT, shift_length)
         cumobs.addObs(obs)
 
     L = cumobs.queueArea / n
     W = cumobs.waitingTime / n
     PW = cumobs.numWait / n
     SL = cumobs.numOntime / n
+    TOTAL_COST = N*W*cost_per_hour + N*cost_per_hour*3*(T-1)
     
     print('average queue length L :', L)
     print('average waiting time W :', W)
     print('delay probability P_w :', PW)
+    print('service level SL :', SL)
+    print('Total expected cost:', TOTAL_COST)
+    
+    return W
+    
+    
+def simulations_critical(lamda, N, tc, T, AWT, n, shift_length, cost_per_hour):
+    cumobs = QPerformanceMeasures()
+    for j in range(n):
+        obs = simrun(lamda, N, tc, T, AWT, shift_length)
+        cumobs.addObs(obs)
 
+    L = cumobs.queueArea / n
+    W = cumobs.waitingTime / n
+    PW = cumobs.numWait / n
+    SL = cumobs.numOntime / n
+    PENALTY_COST = cumobs.lateWeight / n * 500
+    TOTAL_COST = PENALTY_COST + N*W*cost_per_hour + N*cost_per_hour*3*(T-1)
+    
+    print('average queue length L :', L)
+    print('average waiting time W :', W)
+    print('delay probability P_w :', PW)
     print('service level SL :', SL)
     
-def simulations_critical(lamda, N, T, AWT, n, shift_length):
-    cumobs = QPerformanceMeasures()
-    for j in range(n):
-        obs = simrun(lamda,  N, T, AWT, shift_length)
-        cumobs.addObs(obs)
-
-    L = cumobs.queueArea / n
-    W = cumobs.waitingTime / n
-    PW = cumobs.numWait / n
-    SL = cumobs.numOntime / n
-    
-    print(cumobs.lateWeight)
-    PENALTY_COST = cumobs.lateWeight * 500
-    
-    print('average queue length L :', L)
-    print('average waiting time W :', W)
-    print('delay probability P_w :', PW)
     print('Penalty cost:', PENALTY_COST)
+    print('Total expected cost:', TOTAL_COST)
 
-    print('service level SL :', SL)
-
+    return W, PENALTY_COST
 
 ########## main ########################################################
 def main():
@@ -377,24 +380,45 @@ def main():
     lambda_inbound = data.getInboundRate()
     lambda_outbound = data.getOutboundRate()*0.8
     lambda_critical = data.getOutboundRate()*0.2
-    
+
+    tc = 0
     shift_length = 8
     
     c_inbound = 10  # number of servers
     c_outbound = 12
-    c_critical = 4
+    c_critical = 2
     
-    cost_worker = shift_length*27*3
-    waiting_cost_per_minute = 27/60
-    
+    cost_per_hour = 27*3
+    cost_per_hour_critical = 35*3
 
-    AWT = 1
-
-    T = 7*24+1
-
+    AWT = 1 # we need to finish servicing in 1 hour
+    #T = 7*24+1 # run for 7 days + 1 hour as we start at 1
+    T = 168
     n = 200  # number of runs
 
-    simulations_critical(lambda_critical, c_critical, T, AWT, n, shift_length)
+    # print('CRITICAL OUTBOUND')
+    # simulations_critical(lambda_critical, c_critical, tc, T, AWT, n, shift_length, cost_per_hour_critical)
+    # print('NON-CRITICAL INBOUND')
+    # simulations(lambda_inbound, c_inbound, tc, T, AWT, n, shift_length, cost_per_hour)
+    # print('NON-CRITICAL OUTBOUND')
+    # simulations(lambda_outbound, c_outbound, tc, T, AWT, n, shift_length, cost_per_hour)
+
+    mod = Model('IP1')
+    S = mod.addMVar(vtype=GRB.BINARY, shape = (T/shift_length, 22), name='S')
+    I = mod.addMVar(vtype=GRB.BINARY, shape = (T/shift_length, 1), name='I')
+    C = mod.addMVar(vtype=GRB.BINARY, shape = (T/shift_length, 1), name='C')
+    O = mod.addMVar(vtype=GRB.BINARY, shape = (T/shift_length, 1), name='O')
+    mod.update()
+
+    mod.setObjective(sum(sum(I[j]*O[j] * S[i][j] * (shift_length*cost_per_hour +
+                        simulations(lambda_inbound, c_inbound, i*8-2, i*8-2+8, AWT, n, shift_length, cost_per_hour)
+                        * cost_per_hour) for j in range(22)) for i in range(T/shift_length)) +
+                     sum(sum(I[j] * O[j] * S[i][j] * (shift_length * cost_per_hour +
+                        simulations(lambda_outbound, c_outbound, i*8-2, i*8-2+8, AWT, n, shift_length, cost_per_hour)
+                        * cost_per_hour) for j in range(22)) for i in range(T/shift_length))
+                                                    )
+
+
 
 if __name__ == '__main__':
     main()
